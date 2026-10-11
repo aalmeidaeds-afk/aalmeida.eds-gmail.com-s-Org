@@ -1,0 +1,6 @@
+{
+  "name": "Moto Clube",
+  "description": "Plataforma completa de gestão de Moto Clube: associados, aprovação, carteirinha digital, emergência, veículos, manutenção, abastecimento, eventos, comunicados, mensalidades PIX, SOS, mecânicos, guinchos, seguros e busca nacional.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

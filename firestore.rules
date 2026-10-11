@@ -1,0 +1,526 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() &&
+             ('email' in request.auth.token) &&
+             request.auth.token.email == 'aalmeida.eds@gmail.com' &&
+             ('email_verified' in request.auth.token) &&
+             request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/associados/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/associados/$(request.auth.uid)).data.perfilAcesso in ['Diretoria', 'Financeiro', 'Administrador', 'SuperAdmin']
+      );
+    }
+
+    function isOwner(ownerId) {
+      return isSignedIn() && request.auth.uid == ownerId;
+    }
+
+    function isRecordOwner() {
+      return isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    function isOptStr(data, field, maxLen) {
+      return !(field in data) || data[field] == null || (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    function isOptInt(data, field) {
+      return !(field in data) || data[field] == null || data[field] is int;
+    }
+
+    function isOptNum(data, field) {
+      return !(field in data) || data[field] == null || data[field] is int || data[field] is float;
+    }
+
+    function isOptBool(data, field) {
+      return !(field in data) || data[field] == null || data[field] is bool;
+    }
+
+    // 1. Associado Validation Blueprint
+    function isValidAssociado(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.numeroAssociado is string && data.numeroAssociado.size() >= 1 && data.numeroAssociado.size() <= 50 &&
+             data.nomeCompleto is string && data.nomeCompleto.size() >= 1 && data.nomeCompleto.size() <= 150 &&
+             data.nomeGuerra is string && data.nomeGuerra.size() >= 1 && data.nomeGuerra.size() <= 80 &&
+             data.cpf is string && data.cpf.size() >= 3 && data.cpf.size() <= 30 &&
+             data.tipoSanguineo is string && data.tipoSanguineo.size() >= 1 && data.tipoSanguineo.size() <= 20 &&
+             data.statusAssociado in ['Pendente', 'Em analise', 'Aprovado', 'Ativo', 'Inativo', 'Suspenso', 'Rejeitado', 'Desligado'] &&
+             data.perfilAcesso in ['Associado', 'Diretoria', 'Financeiro', 'Administrador', 'SuperAdmin'] &&
+             data.ativo is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             isOptStr(data, 'fotoUri', 1000) &&
+             isOptStr(data, 'dataAssociacao', 40) &&
+             isOptStr(data, 'dataDesligamento', 40) &&
+             isOptStr(data, 'motivoDesligamento', 500) &&
+             isOptStr(data, 'rg', 40) &&
+             isOptStr(data, 'email', 150) &&
+             isOptStr(data, 'celular', 40) &&
+             isOptStr(data, 'cargo', 100) &&
+             isOptStr(data, 'regional', 100) &&
+             isOptStr(data, 'observacoes', 1000) &&
+             isOptStr(data, 'cnhNumero', 40) &&
+             isOptStr(data, 'emergencia1Nome', 120) &&
+             isOptStr(data, 'emergencia1Telefone', 40) &&
+             isOptStr(data, 'emergencia2Nome', 120) &&
+             isOptStr(data, 'emergencia2Telefone', 40) &&
+             isOptStr(data, 'status', 40);
+    }
+
+    // RLS 1: associados/{userId} - Associado lê/edita apenas seu próprio documento; Diretoria lê/edita todos.
+    match /associados/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (resource == null || isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (resource == null || isRecordOwner() || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       (isOwner(userId) || isAdmin()) &&
+                       (incoming().userId == userId) &&
+                       incoming().keys().hasAll(['userId', 'numeroAssociado', 'nomeCompleto', 'nomeGuerra', 'cpf', 'tipoSanguineo', 'statusAssociado', 'perfilAcesso', 'ativo', 'createdAt', 'updatedAt']) &&
+                       isValidAssociado(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidAssociado(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       (isOwner(userId) || isAdmin());
+
+      allow delete: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
+    }
+
+    // 2. Veiculo Validation Blueprint
+    function isValidVeiculo(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.tipo is string && data.tipo.size() >= 1 && data.tipo.size() <= 60 &&
+             data.marca is string && data.marca.size() >= 1 && data.marca.size() <= 80 &&
+             data.modelo is string && data.modelo.size() >= 1 && data.modelo.size() <= 120 &&
+             data.ano is int && data.ano >= 1900 && data.ano <= 2100 &&
+             data.placa is string && data.placa.size() >= 3 && data.placa.size() <= 20 &&
+             data.kmAtual is int && data.kmAtual >= 0 && data.kmAtual <= 5000000 &&
+             data.ativo is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             isOptStr(data, 'fotoUri', 1000) &&
+             isOptStr(data, 'chassi', 60) &&
+             isOptStr(data, 'renavam', 40) &&
+             isOptStr(data, 'numeroCrvCrlv', 60) &&
+             isOptStr(data, 'associadoId', 128) &&
+             isOptStr(data, 'associadoCpf', 30) &&
+             isOptStr(data, 'status', 40);
+    }
+
+    // RLS 2: veiculos/{veiculoId} - Associado lê/edita apenas os próprios veículos; Diretoria lê/edita todos.
+    match /veiculos/{veiculoId} {
+      allow get: if isSignedIn() && isValidId(veiculoId) && (isRecordOwner() || isAdmin());
+      allow list: if isSignedIn() && (isRecordOwner() || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(veiculoId) &&
+                       (incoming().userId == request.auth.uid || isAdmin()) &&
+                       incoming().keys().hasAll(['userId', 'tipo', 'marca', 'modelo', 'ano', 'placa', 'kmAtual', 'ativo', 'createdAt', 'updatedAt']) &&
+                       isValidVeiculo(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(veiculoId) &&
+                       isValidVeiculo(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (isRecordOwner() || isAdmin());
+
+      allow delete: if isSignedIn() && isValidId(veiculoId) && (isRecordOwner() || isAdmin());
+    }
+
+    // 3. Manutencao Validation Blueprint
+    function isValidManutencao(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.veiculoId is string && data.veiculoId.size() >= 1 && data.veiculoId.size() <= 128 &&
+             data.veiculoNome is string && data.veiculoNome.size() >= 1 && data.veiculoNome.size() <= 150 &&
+             data.data is string && data.data.size() >= 1 && data.data.size() <= 40 &&
+             data.km is int && data.km >= 0 && data.km <= 5000000 &&
+             data.tipo is string && data.tipo.size() >= 1 && data.tipo.size() <= 80 &&
+             (data.valor is int || data.valor is float) && data.valor >= 0 &&
+             data.proximoKm is int && data.proximoKm >= 0 &&
+             data.statusAlerta in ['Em dia', 'Proxima', 'Vencida'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             isOptStr(data, 'descricao', 500) &&
+             isOptStr(data, 'oficina', 120) &&
+             isOptStr(data, 'ordemServico', 80) &&
+             isOptStr(data, 'proximaManutencaoData', 40) &&
+             isOptStr(data, 'observacoes', 1000) &&
+             isOptStr(data, 'associadoId', 128) &&
+             isOptStr(data, 'associadoCpf', 30) &&
+             isOptStr(data, 'status', 40);
+    }
+
+    // RLS 3: manutencoes/{manutencaoId} - Associado lê/edita apenas as próprias manutenções; Diretoria lê/edita todas.
+    match /manutencoes/{manutencaoId} {
+      allow get: if isSignedIn() && isValidId(manutencaoId) && (isRecordOwner() || isAdmin());
+      allow list: if isSignedIn() && (isRecordOwner() || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(manutencaoId) &&
+                       (incoming().userId == request.auth.uid || isAdmin()) &&
+                       incoming().keys().hasAll(['userId', 'veiculoId', 'veiculoNome', 'data', 'km', 'tipo', 'valor', 'proximoKm', 'statusAlerta', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly([
+                         'id', 'userId', 'associadoId', 'associadoCpf', 'veiculoId', 'veiculoNome', 'status', 'data', 'km', 'tipo', 'descricao', 'valor',
+                         'oficina', 'ordemServico', 'proximaManutencaoData', 'proximoKm', 'statusAlerta',
+                         'observacoes', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidManutencao(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(manutencaoId) &&
+                       isValidManutencao(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (isRecordOwner() || isAdmin()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'associadoId', 'associadoCpf', 'veiculoId', 'veiculoNome', 'status', 'data', 'km', 'tipo', 'descricao', 'valor',
+                         'oficina', 'ordemServico', 'proximaManutencaoData', 'proximoKm', 'statusAlerta',
+                         'observacoes', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(manutencaoId) && (isRecordOwner() || isAdmin());
+    }
+
+    // 4. Abastecimento Validation Blueprint
+    function isValidAbastecimento(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.veiculoId is string && data.veiculoId.size() >= 1 && data.veiculoId.size() <= 128 &&
+             data.veiculoNome is string && data.veiculoNome.size() >= 1 && data.veiculoNome.size() <= 150 &&
+             data.data is string && data.data.size() >= 1 && data.data.size() <= 40 &&
+             data.km is int && data.km >= 0 && data.km <= 5000000 &&
+             data.combustivel is string && data.combustivel.size() >= 1 && data.combustivel.size() <= 80 &&
+             (data.litros is int || data.litros is float) && data.litros > 0 &&
+             (data.precoPorLitro is int || data.precoPorLitro is float) && data.precoPorLitro >= 0 &&
+             (data.valorTotal is int || data.valorTotal is float) && data.valorTotal >= 0 &&
+             data.tanqueCheio is bool &&
+             (data.consumoCalculado is int || data.consumoCalculado is float) && data.consumoCalculado >= 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             isOptStr(data, 'hora', 30) &&
+             isOptInt(data, 'kmAnterior') &&
+             isOptStr(data, 'posto', 150) &&
+             isOptStr(data, 'cidade', 100) &&
+             isOptStr(data, 'observacao', 500) &&
+             isOptStr(data, 'associadoId', 128) &&
+             isOptStr(data, 'associadoCpf', 30) &&
+             isOptStr(data, 'status', 40);
+    }
+
+    // RLS 4: abastecimentos/{abastecimentoId} - Associado lê/edita apenas os próprios abastecimentos; Diretoria lê/edita todos.
+    match /abastecimentos/{abastecimentoId} {
+      allow get: if isSignedIn() && isValidId(abastecimentoId) && (isRecordOwner() || isAdmin());
+      allow list: if isSignedIn() && (isRecordOwner() || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(abastecimentoId) &&
+                       (incoming().userId == request.auth.uid || isAdmin()) &&
+                       incoming().keys().hasAll(['userId', 'veiculoId', 'veiculoNome', 'data', 'km', 'combustivel', 'litros', 'precoPorLitro', 'valorTotal', 'tanqueCheio', 'consumoCalculado', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly([
+                         'id', 'userId', 'associadoId', 'associadoCpf', 'veiculoId', 'veiculoNome', 'status', 'data', 'hora', 'km', 'kmAnterior', 'combustivel',
+                         'litros', 'precoPorLitro', 'valorTotal', 'tanqueCheio', 'posto', 'cidade',
+                         'consumoCalculado', 'observacao', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidAbastecimento(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(abastecimentoId) &&
+                       isValidAbastecimento(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (isRecordOwner() || isAdmin()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'associadoId', 'associadoCpf', 'veiculoId', 'veiculoNome', 'status', 'data', 'hora', 'km', 'kmAnterior', 'combustivel',
+                         'litros', 'precoPorLitro', 'valorTotal', 'tanqueCheio', 'posto', 'cidade',
+                         'consumoCalculado', 'observacao', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(abastecimentoId) && (isRecordOwner() || isAdmin());
+    }
+
+    // 5. Evento Validation Blueprint
+    function isValidEvento(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.nome is string && data.nome.size() >= 2 && data.nome.size() <= 150 &&
+             data.data is string && data.data.size() >= 1 && data.data.size() <= 50 &&
+             data.horario is string && data.horario.size() >= 1 && data.horario.size() <= 60 &&
+             data.local is string && data.local.size() >= 1 && data.local.size() <= 150 &&
+             data.cidade is string && data.cidade.size() >= 1 && data.cidade.size() <= 120 &&
+             data.status is string && data.status.size() >= 1 && data.status.size() <= 60 &&
+             data.ativo is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             isOptStr(data, 'endereco', 200) &&
+             isOptStr(data, 'descricao', 1000) &&
+             isOptNum(data, 'valor') &&
+             isOptInt(data, 'limiteParticipantes') &&
+             isOptInt(data, 'confirmadosCount') &&
+             isOptStr(data, 'associadoId', 128);
+    }
+
+    match /eventos/{eventoId} {
+      allow get: if isSignedIn() && isValidId(eventoId) && (existing().ativo == true || isAdmin());
+      allow list: if isSignedIn() && (existing().ativo == true || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(eventoId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'nome', 'data', 'horario', 'local', 'cidade', 'status', 'ativo', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly([
+                         'id', 'userId', 'associadoId', 'nome', 'data', 'horario', 'local', 'endereco', 'cidade', 'descricao',
+                         'valor', 'limiteParticipantes', 'confirmadosCount', 'status', 'ativo',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidEvento(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(eventoId) &&
+                       isValidEvento(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt && (
+                         isAdmin() ||
+                         incoming().diff(existing()).affectedKeys().hasOnly(['confirmadosCount', 'updatedAt']) ||
+                         (existing().userId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'nome', 'data', 'horario', 'local', 'endereco', 'cidade', 'descricao',
+                            'valor', 'limiteParticipantes', 'confirmadosCount', 'status', 'ativo', 'updatedAt'
+                          ]))
+                       );
+
+      allow delete: if isSignedIn() && isValidId(eventoId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 6. Comunicado Validation Blueprint
+    function isValidComunicado(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.titulo is string && data.titulo.size() >= 2 && data.titulo.size() <= 150 &&
+             data.texto is string && data.texto.size() >= 2 && data.texto.size() <= 2000 &&
+             data.data is string && data.data.size() >= 1 && data.data.size() <= 50 &&
+             data.autor is string && data.autor.size() >= 1 && data.autor.size() <= 100 &&
+             data.prioridade is string && data.prioridade.size() >= 1 && data.prioridade.size() <= 50 &&
+             data.ativo is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             isOptStr(data, 'tipo', 60);
+    }
+
+    match /comunicados/{comunicadoId} {
+      allow get: if isSignedIn() && isValidId(comunicadoId) && (existing().ativo == true || isAdmin());
+      allow list: if isSignedIn() && (existing().ativo == true || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(comunicadoId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'titulo', 'texto', 'data', 'autor', 'prioridade', 'ativo', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'titulo', 'texto', 'tipo', 'data', 'autor', 'prioridade', 'ativo',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidComunicado(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(comunicadoId) &&
+                       isValidComunicado(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (existing().userId == request.auth.uid || isAdmin()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'titulo', 'texto', 'tipo', 'data', 'autor', 'prioridade', 'ativo', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(comunicadoId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 7. Mensalidade Validation Blueprint
+    function isValidMensalidade(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.associadoNome is string && data.associadoNome.size() >= 1 && data.associadoNome.size() <= 150 &&
+             data.numeroAssociado is string && data.numeroAssociado.size() >= 1 && data.numeroAssociado.size() <= 50 &&
+             data.competencia is string && data.competencia.size() >= 1 && data.competencia.size() <= 50 &&
+             data.ano is int && data.ano >= 2020 && data.ano <= 2100 &&
+             (data.valor is int || data.valor is float) && data.valor >= 0 &&
+             data.vencimento is string && data.vencimento.size() >= 1 && data.vencimento.size() <= 40 &&
+             data.status in ['Pendente', 'Pago', 'Vencido', 'Cancelado', 'Isento'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             isOptStr(data, 'cpf', 30) &&
+             isOptStr(data, 'dataPagamento', 40) &&
+             isOptStr(data, 'formaPagamento', 60) &&
+             isOptStr(data, 'chavePix', 150) &&
+             isOptStr(data, 'observacoes', 500);
+    }
+
+    match /mensalidades/{mensalidadeId} {
+      allow get: if isSignedIn() && isValidId(mensalidadeId) && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn() &&
+                       isValidId(mensalidadeId) &&
+                       (incoming().userId == request.auth.uid || isAdmin()) &&
+                       incoming().keys().hasAll(['userId', 'associadoNome', 'numeroAssociado', 'competencia', 'ano', 'valor', 'vencimento', 'status', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'associadoNome', 'numeroAssociado', 'competencia', 'ano', 'valor',
+                         'cpf', 'vencimento', 'status', 'dataPagamento', 'formaPagamento', 'chavePix',
+                         'observacoes', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidMensalidade(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(mensalidadeId) &&
+                       isValidMensalidade(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt && (
+                         isAdmin() ||
+                         (existing().userId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'status', 'dataPagamento', 'formaPagamento', 'observacoes', 'updatedAt'
+                          ]))
+                       );
+
+      allow delete: if isSignedIn() && isValidId(mensalidadeId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 8. ParceiroServico Validation Blueprint
+    function isValidParceiroServico(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.nome is string && data.nome.size() >= 2 && data.nome.size() <= 150 &&
+             data.categoria is string && data.categoria.size() >= 2 && data.categoria.size() <= 80 &&
+             data.telefone is string && data.telefone.size() >= 3 && data.telefone.size() <= 40 &&
+             data.cidade is string && data.cidade.size() >= 2 && data.cidade.size() <= 100 &&
+             data.estado is string && data.estado.size() >= 2 && data.estado.size() <= 20 &&
+             data.atendimento24h is bool &&
+             data.atendeMotos is bool &&
+             data.parceiroOficial is bool &&
+             data.ativo is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             isOptStr(data, 'whatsapp', 40) &&
+             isOptStr(data, 'endereco', 200) &&
+             isOptStr(data, 'cep', 30) &&
+             isOptStr(data, 'rodovia', 100) &&
+             isOptStr(data, 'horario', 100) &&
+             isOptBool(data, 'atendeCarros') &&
+             isOptBool(data, 'atendeCaminhoes') &&
+             isOptBool(data, 'fonteExterna') &&
+             isOptNum(data, 'distanciaKm') &&
+             isOptStr(data, 'observacoes', 500);
+    }
+
+    match /parceiros_servicos/{parceiroId} {
+      allow get: if isSignedIn() && isValidId(parceiroId);
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+                       isValidId(parceiroId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'nome', 'categoria', 'telefone', 'cidade', 'estado', 'atendimento24h', 'atendeMotos', 'parceiroOficial', 'ativo', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly([
+                         'id', 'userId', 'nome', 'categoria', 'telefone', 'whatsapp', 'endereco', 'cep',
+                         'cidade', 'estado', 'rodovia', 'horario', 'atendimento24h', 'atendeMotos',
+                         'atendeCarros', 'atendeCaminhoes', 'parceiroOficial', 'fonteExterna',
+                         'distanciaKm', 'observacoes', 'ativo', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidParceiroServico(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(parceiroId) &&
+                       isValidParceiroServico(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (existing().userId == request.auth.uid || isAdmin()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'nome', 'categoria', 'telefone', 'whatsapp', 'endereco', 'cep',
+                         'cidade', 'estado', 'rodovia', 'horario', 'atendimento24h', 'atendeMotos',
+                         'atendeCarros', 'atendeCaminhoes', 'parceiroOficial', 'fonteExterna',
+                         'distanciaKm', 'observacoes', 'ativo', 'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(parceiroId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 9. ConfiguracaoIdentidadeClube Validation Blueprint
+    function isValidConfiguracaoIdentidadeClube(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.nomeClube is string && data.nomeClube.size() >= 2 && data.nomeClube.size() <= 120 &&
+             data.lemaClube is string && data.lemaClube.size() >= 2 && data.lemaClube.size() <= 150 &&
+             data.corPrimariaHex is string && data.corPrimariaHex.size() >= 4 && data.corPrimariaHex.size() <= 20 &&
+             data.corSecundariaHex is string && data.corSecundariaHex.size() >= 4 && data.corSecundariaHex.size() <= 20 &&
+             data.chavePix is string && data.chavePix.size() >= 3 && data.chavePix.size() <= 150 &&
+             (data.valorMensalidadePadrao is int || data.valorMensalidadePadrao is float) && data.valorMensalidadePadrao >= 0 &&
+             data.ativo is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             isOptStr(data, 'subtituloClube', 120) &&
+             isOptStr(data, 'cnpjClube', 40) &&
+             isOptStr(data, 'sedeCidadeEstado', 100) &&
+             isOptStr(data, 'logoPreset', 60) &&
+             isOptStr(data, 'logoUri', 1000) &&
+             isOptStr(data, 'corDestaqueSosHex', 20) &&
+             isOptStr(data, 'corFundoHex', 20) &&
+             isOptStr(data, 'corSuperficieHex', 20) &&
+             isOptStr(data, 'presetPaleta', 80) &&
+             isOptStr(data, 'emailContato', 150) &&
+             isOptStr(data, 'telefoneContato', 50) &&
+             isOptStr(data, 'whatsappClube', 50) &&
+             isOptStr(data, 'instagramClube', 100) &&
+             isOptStr(data, 'siteClube', 150) &&
+             isOptStr(data, 'enderecoSede', 250) &&
+             isOptStr(data, 'tipoChavePix', 50) &&
+             isOptStr(data, 'favorecidoPix', 150) &&
+             isOptStr(data, 'bancoPix', 100) &&
+             isOptStr(data, 'cidadePix', 100) &&
+             isOptInt(data, 'diaVencimentoPadrao');
+    }
+
+    match /configuracoes_clube/{configId} {
+      allow get: if isSignedIn() && isValidId(configId);
+      allow list: if isSignedIn();
+
+      allow create: if isSignedIn() &&
+                       isValidId(configId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'userId', 'nomeClube', 'lemaClube', 'corPrimariaHex',
+                         'corSecundariaHex', 'chavePix', 'valorMensalidadePadrao',
+                         'ativo', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidConfiguracaoIdentidadeClube(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(configId) &&
+                       (isRecordOwner() || isAdmin()) &&
+                       isValidConfiguracaoIdentidadeClube(incoming());
+
+      allow delete: if isSignedIn() && isValidId(configId) && (existing().userId == request.auth.uid || isAdmin());
+    }
+  }
+}
